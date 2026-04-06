@@ -208,16 +208,27 @@ export function convertTweetToRecord(tweetResult: any, now: string): BookmarkRec
       : undefined,
   }));
 
-  const urlEntities = legacy?.entities?.urls ?? [];
+  // ── Extract full article / Notes body (long-form posts) ──────────────
+  const noteTweet = tweet?.note_tweet?.note_tweet_results?.result;
+  const articleBody: string | null = noteTweet?.text ?? null;
+
+  // Prefer note_tweet URLs over legacy when available (articles have richer links)
+  const noteUrlEntities = noteTweet?.entity_set?.urls ?? [];
+  const legacyUrlEntities = legacy?.entities?.urls ?? [];
+  const urlEntities = noteUrlEntities.length > 0 ? noteUrlEntities : legacyUrlEntities;
   const links: string[] = urlEntities
     .map((u: any) => u.expanded_url)
     .filter((u: string | undefined) => u && !u.includes('t.co'));
+
+  // Use full article body as the text when available, fall back to legacy
+  const text = articleBody ?? legacy.full_text ?? legacy.text ?? '';
 
   return {
     id: tweetId,
     tweetId,
     url: `https://x.com/${authorHandle ?? '_'}/status/${tweetId}`,
-    text: legacy.full_text ?? legacy.text ?? '',
+    text,
+    articleBody,
     authorHandle,
     authorName,
     authorProfileImageUrl,

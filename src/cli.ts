@@ -377,7 +377,7 @@ export function buildCli() {
         return;
       }
       for (const item of items) {
-        const tags = [item.primaryCategory, item.primaryDomain].filter(Boolean).join(' \u00b7 ');
+        const tags = [item.articleBody ? 'article' : null, item.primaryCategory, item.primaryDomain].filter(Boolean).join(' \u00b7 ');
         const summary = item.text.length > 120 ? `${item.text.slice(0, 117)}...` : item.text;
         console.log(`${item.id}  ${item.authorHandle ? `@${item.authorHandle}` : '@?'}  ${item.postedAt?.slice(0, 10) ?? '?'}${tags ? `  ${tags}` : ''}`);
         console.log(`  ${summary}`);
@@ -405,9 +405,13 @@ export function buildCli() {
         console.log(JSON.stringify(item, null, 2));
         return;
       }
-      console.log(`${item.id} \u00b7 ${item.authorHandle ? `@${item.authorHandle}` : '@?'}`);
+      console.log(`${item.id} \u00b7 ${item.authorHandle ? `@${item.authorHandle}` : '@?'}${item.articleBody ? '  [article]' : ''}`);
       console.log(item.url);
-      console.log(item.text);
+      if (item.articleBody) {
+        console.log(`\n${item.articleBody}`);
+      } else {
+        console.log(item.text);
+      }
       if (item.links.length) console.log(`links: ${item.links.join(', ')}`);
       if (item.categories) console.log(`categories: ${item.categories}`);
       if (item.domains) console.log(`domains: ${item.domains}`);

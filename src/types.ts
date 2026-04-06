@@ -54,6 +54,8 @@ export interface BookmarkRecord {
   quotedStatusId?: string;
   language?: string;
   sourceApp?: string;
+  /** Full article/Notes body when the bookmark is a long-form post (X Articles / Notes). */
+  articleBody?: string | null;
   possiblySensitive?: boolean;
   engagement?: BookmarkEngagementSnapshot;
   media?: string[];

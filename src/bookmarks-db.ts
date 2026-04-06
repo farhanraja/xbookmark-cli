@@ -6,7 +6,7 @@ import type { BookmarkRecord } from './types.js';
 import { classifyCorpus, formatClassificationSummary } from './bookmark-classify.js';
 import type { ClassificationSummary } from './bookmark-classify.js';
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 export interface SearchResult {
   id: string;
@@ -31,6 +31,7 @@ export interface BookmarkTimelineItem {
   tweetId: string;
   url: string;
   text: string;
+  articleBody?: string | null;
   authorHandle?: string;
   authorName?: string;
   authorProfileImageUrl?: string;
@@ -88,25 +89,26 @@ function mapTimelineRow(row: unknown[]): BookmarkTimelineItem {
     tweetId: row[1] as string,
     url: row[2] as string,
     text: row[3] as string,
-    authorHandle: (row[4] as string) ?? undefined,
-    authorName: (row[5] as string) ?? undefined,
-    authorProfileImageUrl: (row[6] as string) ?? undefined,
-    postedAt: (row[7] as string) ?? null,
-    bookmarkedAt: (row[8] as string) ?? null,
-    categories: parseCsv(row[9]),
-    primaryCategory: (row[10] as string) ?? null,
-    domains: parseCsv(row[11]),
-    primaryDomain: (row[12] as string) ?? null,
-    githubUrls: parseJsonArray(row[13]),
-    links: parseJsonArray(row[14]),
-    mediaCount: Number(row[15] ?? 0),
-    linkCount: Number(row[16] ?? 0),
-    likeCount: row[17] as number | null,
-    repostCount: row[18] as number | null,
-    replyCount: row[19] as number | null,
-    quoteCount: row[20] as number | null,
-    bookmarkCount: row[21] as number | null,
-    viewCount: row[22] as number | null,
+    articleBody: (row[4] as string) ?? null,
+    authorHandle: (row[5] as string) ?? undefined,
+    authorName: (row[6] as string) ?? undefined,
+    authorProfileImageUrl: (row[7] as string) ?? undefined,
+    postedAt: (row[8] as string) ?? null,
+    bookmarkedAt: (row[9] as string) ?? null,
+    categories: parseCsv(row[10]),
+    primaryCategory: (row[11] as string) ?? null,
+    domains: parseCsv(row[12]),
+    primaryDomain: (row[13] as string) ?? null,
+    githubUrls: parseJsonArray(row[14]),
+    links: parseJsonArray(row[15]),
+    mediaCount: Number(row[16] ?? 0),
+    linkCount: Number(row[17] ?? 0),
+    likeCount: row[18] as number | null,
+    repostCount: row[19] as number | null,
+    replyCount: row[20] as number | null,
+    quoteCount: row[21] as number | null,
+    bookmarkCount: row[22] as number | null,
+    viewCount: row[23] as number | null,
   };
 }
 
@@ -194,7 +196,8 @@ function initSchema(db: Database): void {
     primary_category TEXT,
     github_urls TEXT,
     domains TEXT,
-    primary_domain TEXT
+    primary_domain TEXT,
+    article_body TEXT
   )`);
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_bookmarks_author ON bookmarks(author_handle)`);
@@ -207,6 +210,7 @@ function initSchema(db: Database): void {
     text,
     author_handle,
     author_name,
+    article_body,
     content=bookmarks,
     content_rowid=rowid,
     tokenize='porter unicode61'
@@ -230,6 +234,20 @@ function ensureMigrations(db: Database): void {
     }
     db.run("REPLACE INTO meta VALUES ('schema_version', '3')");
   }
+  if (version < 4) {
+    const tableExists = db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='bookmarks'");
+    if (tableExists.length && tableExists[0].values.length > 0) {
+      try { db.run('ALTER TABLE bookmarks ADD COLUMN article_body TEXT'); } catch { /* already exists */ }
+      // Rebuild FTS to include article_body column
+      db.run('DROP TABLE IF EXISTS bookmarks_fts');
+      db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS bookmarks_fts USING fts5(
+        text, author_handle, author_name, article_body,
+        content=bookmarks, content_rowid=rowid, tokenize='porter unicode61'
+      )`);
+      db.run("INSERT INTO bookmarks_fts(bookmarks_fts) VALUES('rebuild')");
+    }
+    db.run("REPLACE INTO meta VALUES ('schema_version', '4')");
+  }
 }
 
 function insertRecord(db: Database, r: BookmarkRecord): void {
@@ -240,7 +258,7 @@ function insertRecord(db: Database, r: BookmarkRecord): void {
   const githubUrls = [...new Set([...githubMatches.map((m) => `https://${m}`), ...githubFromLinks])];
 
   db.run(
-    `INSERT OR REPLACE INTO bookmarks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT OR REPLACE INTO bookmarks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       r.id,
       r.tweetId,
@@ -272,6 +290,7 @@ function insertRecord(db: Database, r: BookmarkRecord): void {
       githubUrls.length ? JSON.stringify(githubUrls) : null,
       null, // domains — populated by classify-domains pass
       null, // primary_domain
+      r.articleBody ?? null,
     ]
   );
 }
@@ -353,7 +372,7 @@ export async function searchBookmarks(options: SearchOptions): Promise<SearchRes
 
     // If we have an FTS query, use bm25 for ranking; otherwise sort by posted_at
     const orderBy = options.query
-      ? `ORDER BY bm25(bookmarks_fts, 5.0, 1.0, 1.0) ASC`
+      ? `ORDER BY bm25(bookmarks_fts, 5.0, 1.0, 1.0, 3.0) ASC`
       : `ORDER BY b.posted_at DESC`;
 
     // For FTS ranking we need to join with the FTS table for bm25
@@ -361,7 +380,7 @@ export async function searchBookmarks(options: SearchOptions): Promise<SearchRes
     if (options.query) {
       sql = `
         SELECT b.id, b.url, b.text, b.author_handle, b.author_name, b.posted_at,
-               bm25(bookmarks_fts, 5.0, 1.0, 1.0) as score
+               bm25(bookmarks_fts, 5.0, 1.0, 1.0, 3.0) as score
         FROM bookmarks b
         JOIN bookmarks_fts ON bookmarks_fts.rowid = b.rowid
         ${where}
@@ -414,6 +433,7 @@ export async function listBookmarks(
         b.tweet_id,
         b.url,
         b.text,
+        b.article_body,
         b.author_handle,
         b.author_name,
         b.author_profile_image_url,
@@ -549,6 +569,7 @@ export async function getBookmarkById(id: string): Promise<BookmarkTimelineItem 
         b.tweet_id,
         b.url,
         b.text,
+        b.article_body,
         b.author_handle,
         b.author_name,
         b.author_profile_image_url,
